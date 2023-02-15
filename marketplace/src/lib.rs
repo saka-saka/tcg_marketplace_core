@@ -9,6 +9,10 @@ impl SessionID {
     fn to_uuid(&self) -> Result<Uuid, uuid::Error> {
         Uuid::parse_str(&self.0)
     }
+    pub fn parse(s: &str) -> Result<Self, uuid::Error> {
+        Uuid::parse_str(s)?;
+        Ok(Self(s.to_owned()))
+    }
 }
 pub struct User {
     pub id: Uuid,
@@ -41,7 +45,7 @@ pub trait HaveUserRepository {
 }
 
 #[async_trait]
-trait Service: HaveAuthnRepository + HaveUserRepository {
+pub trait Service: HaveAuthnRepository + HaveUserRepository {
     async fn get_user(&self, session_id: SessionID) -> Result<User, CoreServiceError> {
         let authn_repo = self.provide_authn_repository();
         let user_id = authn_repo.auth(session_id).await?;
@@ -62,6 +66,8 @@ trait Service: HaveAuthnRepository + HaveUserRepository {
         Ok(())
     }
 }
+
+impl<T: HaveAuthnRepository + HaveUserRepository> Service for T {}
 
 #[derive(Error, Debug)]
 pub enum CoreServiceError {
@@ -96,8 +102,8 @@ pub struct Context {
 }
 
 impl Context {
-    pub async fn new(url: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let pool = PgPoolOptions::new().max_connections(5).connect(url).await?;
+    pub fn new(url: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let pool = PgPoolOptions::new().max_connections(5).connect_lazy(url)?;
         Ok(Self { pool })
     }
 }
@@ -141,5 +147,18 @@ impl UserRepository for Context {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+}
+
+impl HaveUserRepository for Context {
+    type Repository = Context;
+    fn provide_user_repository(&self) -> &Self::Repository {
+        self
+    }
+}
+impl HaveAuthnRepository for Context {
+    type Repository = Context;
+    fn provide_authn_repository(&self) -> &Self::Repository {
+        self
     }
 }
