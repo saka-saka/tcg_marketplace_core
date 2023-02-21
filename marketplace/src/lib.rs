@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use domain::{EmailAddress, EmailCode};
+use domain::{Code, EmailAddress, EmailCode};
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 use thiserror::Error;
 use uuid::Uuid;
@@ -252,7 +252,11 @@ impl AuthnRepository for Context {
         &self,
         session_id: SessionID,
     ) -> Result<EmailCode, AuthnRepositoryError> {
-        unimplemented!()
+        let record = sqlx::query!("SELECT eac.email, eac.code FROM email_auth_code AS eac LEFT JOIN email_session ON email_session.session_id = $1", session_id.to_uuid().unwrap()).fetch_one(&self.pool).await.unwrap();
+        Ok(EmailCode {
+            email: EmailAddress(record.email),
+            code: Code(record.code),
+        })
     }
 }
 
@@ -418,8 +422,8 @@ mod domain {
 
     #[derive(Clone)]
     pub struct EmailCode {
-        email: EmailAddress,
-        code: Code,
+        pub(crate) email: EmailAddress,
+        pub(crate) code: Code,
     }
 
     impl EmailCode {
@@ -451,7 +455,7 @@ mod domain {
     }
 
     #[derive(Clone)]
-    struct Code(String);
+    pub(crate) struct Code(pub(crate) String);
     impl Code {
         fn new() -> Self {
             let rand_str: String = rand::thread_rng()
