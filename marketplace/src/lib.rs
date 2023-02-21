@@ -261,13 +261,14 @@ mod sendgrid {
     #[derive(Serialize)]
     pub struct SendEmailData {
         personalizations: Vec<Personalization>,
+        from: SenderData,
+        subject: String,
+        content: Vec<EmailContent>,
     }
 
     #[derive(Serialize)]
     pub struct SenderData {
         email: EmailAddress,
-        subject: String,
-        content: Vec<EmailContent>,
     }
 
     #[derive(Serialize)]
@@ -278,10 +279,13 @@ mod sendgrid {
 
     #[derive(Serialize)]
     pub struct Personalization {
-        to: Vec<String>,
-        from: SenderData,
+        to: Vec<To>,
     }
 
+    #[derive(Serialize)]
+    pub struct To {
+        email: EmailAddress,
+    }
     pub struct SendGrid {
         key: String,
     }
@@ -296,18 +300,21 @@ mod sendgrid {
             let url = "https://api.sendgrid.com/v3/mail/send";
             let data = SendEmailData {
                 personalizations: vec![Personalization {
-                    to: vec![email_code.get_address().to_string()],
-                    from: SenderData {
-                        email: EmailAddress::parse("noreply@tcgbuysell.com").unwrap(),
-                        subject: String::from("Sign in to TCG Marketplace"),
-                        content: vec![EmailContent {
-                            r#type: "text/plain".to_string(),
-                            value: String::from(email_code.get_code()),
-                        }],
-                    },
+                    to: vec![To {
+                        email: email_code.get_address(),
+                    }],
+                }],
+                from: SenderData {
+                    email: EmailAddress::parse("noreply@tcgbuysell.com").unwrap(),
+                },
+                subject: String::from("Sign in to TCG Marketplace"),
+                content: vec![EmailContent {
+                    r#type: "text/plain".to_string(),
+                    value: String::from(email_code.get_code()),
                 }],
             };
             let json_data = serde_json::to_string(&data).unwrap();
+            println!("{json_data}");
             let client = reqwest::Client::new();
             let mut headers = HeaderMap::new();
             let authorization_value =
@@ -321,6 +328,7 @@ mod sendgrid {
                 .send()
                 .await
                 .unwrap();
+            println!("{:?}", result);
         }
     }
 }
@@ -345,15 +353,15 @@ mod domain {
         pub fn comfirm_code(&self, code: &str) -> bool {
             self.code.comfirm(code)
         }
-        pub fn get_address(&self) -> &str {
-            &self.email.0
+        pub fn get_address(&self) -> EmailAddress {
+            self.email.clone()
         }
         pub fn get_code(&self) -> &str {
             &self.code.get_code()
         }
     }
 
-    #[derive(Serialize)]
+    #[derive(Serialize, Clone)]
     pub struct EmailAddress(String);
 
     impl EmailAddress {
