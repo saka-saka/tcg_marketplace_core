@@ -61,7 +61,7 @@ pub trait HaveSettingRepository {
 pub struct SendAuthCodeEmailCommand {
     pub to: String,
 }
-pub struct ComfirmAuthCodeEmailCommand {}
+pub struct ConfirmAuthCodeEmailCommand {}
 
 pub enum SettingKey {
     SendGridApiKey,
@@ -93,9 +93,9 @@ pub trait Service: HaveAuthnRepository + HaveUserRepository + HaveSettingReposit
             .await;
         Ok(())
     }
-    async fn comfirm_auth_code_email(
+    async fn confirm_auth_code_email(
         &self,
-        _command: ComfirmAuthCodeEmailCommand,
+        _command: ConfirmAuthCodeEmailCommand,
     ) -> Result<(), CoreServiceError> {
         unimplemented!()
     }
@@ -350,8 +350,8 @@ mod domain {
                 code: Code::new(),
             })
         }
-        pub fn comfirm_code(&self, code: &str) -> bool {
-            self.code.comfirm(code)
+        pub fn confirm_code(&self, code: &str) -> bool {
+            self.code.confirm(code)
         }
         pub fn get_address(&self) -> EmailAddress {
             self.email.clone()
@@ -379,7 +379,7 @@ mod domain {
                 .collect();
             Self(rand_str)
         }
-        fn comfirm(&self, code: &str) -> bool {
+        fn confirm(&self, code: &str) -> bool {
             code.to_string() == self.0
         }
         fn get_code(&self) -> &str {
