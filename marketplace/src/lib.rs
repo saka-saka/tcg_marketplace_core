@@ -1,23 +1,42 @@
 use async_trait::async_trait;
-use domain::{Code, EmailAddress, EmailCode};
+use domain::{EmailAddress, EmailCode, EmailCodeBuilder};
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 use thiserror::Error;
 use uuid::Uuid;
 
 pub struct UserID(String);
-pub struct SessionID(String);
-impl SessionID {
-    pub fn new() -> Self {
-        Self(uuid::Uuid::new_v4().to_string())
-    }
-    fn to_uuid(&self) -> Result<Uuid, uuid::Error> {
-        Uuid::parse_str(&self.0)
-    }
-    pub fn parse(s: &str) -> Result<Self, uuid::Error> {
-        Uuid::parse_str(s)?;
-        Ok(Self(s.to_owned()))
+impl From<Uuid> for UserID {
+    fn from(value: Uuid) -> Self {
+        Self(value.to_string())
     }
 }
+impl ToString for UserID {
+    fn to_string(&self) -> String {
+        self.0.clone()
+    }
+}
+
+#[derive(Clone)]
+pub struct SessionID(Uuid);
+impl SessionID {
+    pub fn new() -> Self {
+        Self(uuid::Uuid::new_v4())
+    }
+    fn to_uuid(&self) -> &Uuid {
+        &self.0
+    }
+    pub fn parse(s: &str) -> Result<Self, uuid::Error> {
+        let sid = Uuid::parse_str(s)?;
+        Ok(Self(sid))
+    }
+}
+
+impl ToString for SessionID {
+    fn to_string(&self) -> String {
+        self.0.to_string()
+    }
+}
+
 pub struct User {
     pub id: Uuid,
     pub name: String,
@@ -27,15 +46,14 @@ pub struct User {
 pub trait AuthnRepository {
     async fn auth(&self, session_id: SessionID) -> Result<Uuid, AuthnRepositoryError>;
     async fn save_email_code(&self, email_code: EmailCode) -> Result<(), AuthnRepositoryError>;
-    async fn save_email_session(
+    async fn get_email_code(&self, sid: &SessionID) -> Result<EmailCode, AuthnRepositoryError>;
+    async fn get_email(
         &self,
-        email: EmailAddress,
-        session_id: SessionID,
-    ) -> Result<(), AuthnRepositoryError>;
-    async fn get_email_code(
-        &self,
-        session_id: SessionID,
-    ) -> Result<EmailCode, AuthnRepositoryError>;
+        sid: &SessionID,
+    ) -> Result<Option<EmailAddress>, AuthnRepositoryError>;
+    async fn delete_email_code(&self, session_id: SessionID) -> Result<(), AuthnRepositoryError>;
+    async fn create_session(&self) -> Result<SessionID, AuthnRepositoryError>;
+    async fn update_session(&self, user_id: UserID) -> Result<(), AuthnRepositoryError>;
 }
 
 pub trait HaveAuthnRepository {
@@ -46,7 +64,7 @@ pub trait HaveAuthnRepository {
 #[async_trait]
 pub trait UserRepository {
     async fn retrive_user(&self, user_id: Uuid) -> Result<Option<User>, UserRepositoryError>;
-    async fn create_user(&self, email: EmailAddress) -> Result<(), UserRepositoryError>;
+    async fn create_user(&self, email: EmailAddress) -> Result<UserID, UserRepositoryError>;
     async fn update_username(
         &self,
         user_id: Uuid,
@@ -93,44 +111,57 @@ impl ToString for SettingKey {
     }
 }
 
+pub struct StartSessionCommand {}
+
+impl StartSessionCommand {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
 #[async_trait]
 pub trait Service: HaveAuthnRepository + HaveUserRepository + HaveSettingRepository {
+    async fn start_session(
+        &self,
+        _command: StartSessionCommand,
+    ) -> Result<SessionID, CoreServiceError> {
+        let authn_repo = self.provide_authn_repository();
+        let session_id = authn_repo.create_session().await?;
+        Ok(session_id)
+    }
+    // if the email has been registered for this session, update it.
     async fn send_auth_code_email(
         &self,
         command: SendAuthCodeEmailCommand,
     ) -> Result<(), CoreServiceError> {
         let authn_repo = self.provide_authn_repository();
+        let email_code = EmailCodeBuilder::new()
+            .session_id(command.session_id)
+            .email_address(&command.to)
+            .build()
+            .unwrap();
+        authn_repo.save_email_code(email_code.clone()).await?;
         let setting_repo = self.provide_setting_repository();
         let send_grid_api_key = setting_repo
             .retrive_setting(SettingKey::SendGridApiKey)
-            .await
-            .unwrap()
-            .unwrap();
-        let email_code = EmailCode::from_email(&command.to).unwrap();
-        authn_repo
-            .save_email_code(email_code.clone())
-            .await
-            .unwrap();
-        authn_repo
-            .save_email_session(email_code.get_address(), command.session_id)
-            .await
+            .await?
             .unwrap();
         let mailer = sendgrid::SendGrid::new(&send_grid_api_key);
         mailer.send_mail_code(email_code).await;
         Ok(())
     }
+
     async fn confirm_auth_code_email(
         &self,
         command: ConfirmAuthCodeEmailCommand,
     ) -> Result<(), CoreServiceError> {
         let authn_repo = self.provide_authn_repository();
-        let email_code = authn_repo.get_email_code(command.session_id).await.unwrap();
+        let email_code = authn_repo.get_email_code(&command.session_id).await?;
         if email_code.confirm_code(&command.code) {
             let user_repo = self.provide_user_repository();
-            user_repo
-                .create_user(email_code.get_address())
-                .await
-                .unwrap();
+            let user_id = user_repo.create_user(email_code.get_address()).await?;
+            authn_repo.update_session(user_id).await?;
+            authn_repo.delete_email_code(command.session_id).await?;
         } else {
             return Err(CoreServiceError::AuthenticationError(
                 AuthnRepositoryError::Unauthenticated,
@@ -138,11 +169,12 @@ pub trait Service: HaveAuthnRepository + HaveUserRepository + HaveSettingReposit
         }
         Ok(())
     }
+
     async fn get_user(&self, session_id: SessionID) -> Result<User, CoreServiceError> {
         let authn_repo = self.provide_authn_repository();
         let user_id = authn_repo.auth(session_id).await?;
         let user_repo = self.provide_user_repository();
-        let user = user_repo.retrive_user(user_id).await.unwrap().unwrap();
+        let user = user_repo.retrive_user(user_id).await?.unwrap();
         Ok(user)
     }
 
@@ -215,10 +247,12 @@ impl Context {
 #[async_trait]
 impl AuthnRepository for Context {
     async fn auth(&self, session_id: SessionID) -> Result<Uuid, AuthnRepositoryError> {
-        let sid = session_id.to_uuid()?;
-        let record = sqlx::query!("SELECT user_id FROM sessions WHERE id = $1", sid)
-            .fetch_one(&self.pool)
-            .await?;
+        let record = sqlx::query!(
+            "SELECT user_id FROM sessions WHERE id = $1",
+            session_id.to_uuid()
+        )
+        .fetch_one(&self.pool)
+        .await?;
         let user_id = record
             .user_id
             .ok_or(AuthnRepositoryError::Unauthenticated)?;
@@ -226,37 +260,63 @@ impl AuthnRepository for Context {
     }
     async fn save_email_code(&self, email_code: EmailCode) -> Result<(), AuthnRepositoryError> {
         sqlx::query!(
-            "INSERT INTO email_auth_code(email, code) VALUES($1, $2)",
+            "INSERT INTO email_auth_code(email, code, session_id) VALUES($1, $2, $3)",
             &email_code.get_address().0,
-            email_code.get_code()
+            email_code.get_code(),
+            email_code.session_id.to_uuid(),
         )
         .execute(&self.pool)
         .await?;
         Ok(())
     }
-    async fn save_email_session(
+    async fn get_email_code(&self, sid: &SessionID) -> Result<EmailCode, AuthnRepositoryError> {
+        let record = sqlx::query!("SELECT eac.email, eac.code FROM email_auth_code AS eac LEFT JOIN email_session ON email_session.session_id = $1", sid.to_uuid()).fetch_one(&self.pool).await?;
+        let email_code = EmailCodeBuilder::new()
+            .email_address(&record.email)
+            .session_id(sid.clone())
+            .code(&record.code)
+            .build()
+            .unwrap();
+        Ok(email_code)
+    }
+    async fn get_email(
         &self,
-        email: EmailAddress,
-        session_id: SessionID,
-    ) -> Result<(), AuthnRepositoryError> {
+        sid: &SessionID,
+    ) -> Result<Option<EmailAddress>, AuthnRepositoryError> {
+        let record = sqlx::query!(
+            "SELECT email from email_session WHERE session_id = $1",
+            sid.to_uuid()
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        let email = record
+            .ok_or_else(|| AuthnRepositoryError::Unauthenticated)?
+            .email;
+        let email_addr = EmailAddress::parse(&email).unwrap();
+        Ok(Some(email_addr))
+    }
+    async fn create_session(&self) -> Result<SessionID, AuthnRepositoryError> {
+        let sid = SessionID::new();
+        sqlx::query!("INSERT INTO sessions(id) VALUES($1)", sid.to_uuid())
+            .execute(&self.pool)
+            .await?;
+        Ok(sid)
+    }
+    async fn update_session(&self, user_id: UserID) -> Result<(), AuthnRepositoryError> {
+        let uid = Uuid::parse_str(&user_id.to_string())?;
+        sqlx::query!("UPDATE sessions SET user_id = $1 WHERE id = (SELECT email_auth_code.session_id FROM email_auth_code LEFT JOIN users ON users.email = email_auth_code.email WHERE users.id = $1)", uid)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+    async fn delete_email_code(&self, session_id: SessionID) -> Result<(), AuthnRepositoryError> {
         sqlx::query!(
-            "INSERT INTO email_session(email, session_id) VALUES($1, $2)",
-            &email.0,
-            session_id.to_uuid()?
+            "DELETE FROM email_auth_code WHERE session_id = $1",
+            session_id.to_uuid()
         )
         .execute(&self.pool)
         .await?;
         Ok(())
-    }
-    async fn get_email_code(
-        &self,
-        session_id: SessionID,
-    ) -> Result<EmailCode, AuthnRepositoryError> {
-        let record = sqlx::query!("SELECT eac.email, eac.code FROM email_auth_code AS eac LEFT JOIN email_session ON email_session.session_id = $1", session_id.to_uuid().unwrap()).fetch_one(&self.pool).await.unwrap();
-        Ok(EmailCode {
-            email: EmailAddress(record.email),
-            code: Code(record.code),
-        })
     }
 }
 
@@ -272,15 +332,21 @@ impl UserRepository for Context {
         });
         Ok(user)
     }
-    async fn create_user(&self, email: EmailAddress) -> Result<(), UserRepositoryError> {
-        sqlx::query!(
-            "INSERT INTO users(id, username, email) VALUES(gen_random_uuid(), 'unnamed', $1)",
+    async fn create_user(&self, email: EmailAddress) -> Result<UserID, UserRepositoryError> {
+        let result = sqlx::query!(
+            "INSERT INTO users(id, username, email) VALUES(gen_random_uuid(), 'unnamed', $1) ON CONFLICT(email) DO NOTHING RETURNING id",
             &email.0
-        )
-        .execute(&self.pool)
-        .await
-        .unwrap();
-        Ok(())
+        ).fetch_optional(&self.pool).await?;
+        let id = match result {
+            Some(record) => record.id,
+            None => {
+                sqlx::query!("SELECT id FROM users WHERE email = $1", &email.0)
+                    .fetch_one(&self.pool)
+                    .await?
+                    .id
+            }
+        };
+        Ok(id.into())
     }
     async fn update_username(
         &self,
@@ -420,25 +486,84 @@ mod domain {
     use serde::Serialize;
     use thiserror::Error;
 
+    use crate::SessionID;
+
     #[derive(Clone)]
     pub struct EmailCode {
-        pub(crate) email: EmailAddress,
+        pub(crate) email_address: EmailAddress,
         pub(crate) code: Code,
+        pub(crate) session_id: SessionID,
+    }
+
+    pub struct EmailCodeBuilder {
+        pub(crate) email_address: Option<String>,
+        pub(crate) session_id: Option<SessionID>,
+        pub(crate) code: Option<String>,
+    }
+
+    impl EmailCodeBuilder {
+        pub(crate) fn new() -> Self {
+            Self {
+                email_address: None,
+                session_id: None,
+                code: None,
+            }
+        }
+        pub(crate) fn email_address(self, email_address: &str) -> Self {
+            Self {
+                email_address: Some(email_address.to_string()),
+                session_id: self.session_id,
+                code: self.code,
+            }
+        }
+        pub(crate) fn session_id(self, session_id: SessionID) -> Self {
+            Self {
+                email_address: self.email_address,
+                code: self.code,
+                session_id: Some(session_id),
+            }
+        }
+        pub(crate) fn code(self, code: &str) -> Self {
+            Self {
+                email_address: self.email_address,
+                code: Some(code.to_string()),
+                session_id: self.session_id,
+            }
+        }
+        pub(crate) fn build(self) -> Result<EmailCode, EmailCodeBuilderError> {
+            let email_address = self
+                .email_address
+                .ok_or_else(|| EmailCodeBuilderError::Unknown)?;
+            let email_address = EmailAddress::parse(&email_address)?;
+            let code = match self.code {
+                Some(c) => Code(c),
+                None => Code::new(),
+            };
+            let session_id = self
+                .session_id
+                .ok_or_else(|| EmailCodeBuilderError::Unknown)?;
+            Ok(EmailCode {
+                email_address,
+                code,
+                session_id,
+            })
+        }
+    }
+
+    #[derive(Error, Debug)]
+    pub enum EmailCodeBuilderError {
+        #[error("unknown error")]
+        Unknown,
+        #[error("authn error")]
+        AuthnError(#[from] AuthnError),
     }
 
     impl EmailCode {
-        pub fn from_email(email: &str) -> Result<Self, AuthnError> {
-            let email = EmailAddress::parse(email)?;
-            Ok(Self {
-                email,
-                code: Code::new(),
-            })
-        }
         pub fn confirm_code(&self, code: &str) -> bool {
             self.code.confirm(code)
         }
         pub fn get_address(&self) -> EmailAddress {
-            self.email.clone()
+            self.email_address.clone()
         }
         pub fn get_code(&self) -> &str {
             &self.code.get_code()
@@ -451,6 +576,12 @@ mod domain {
     impl EmailAddress {
         pub fn parse(s: &str) -> Result<Self, AuthnError> {
             Ok(Self(s.to_string()))
+        }
+    }
+
+    impl ToString for EmailAddress {
+        fn to_string(&self) -> String {
+            self.0.clone()
         }
     }
 
