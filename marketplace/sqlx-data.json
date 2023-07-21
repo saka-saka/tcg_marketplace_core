@@ -1,0 +1,212 @@
+{
+  "db": "PostgreSQL",
+  "12de38d720d6683798bc0fae3ae2452150127b9139db1182965168255888339f": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Uuid"
+        ]
+      }
+    },
+    "query": "UPDATE sessions SET user_id = $1 WHERE id = (SELECT email_auth_code.session_id FROM email_auth_code LEFT JOIN users ON users.email = email_auth_code.email WHERE users.id = $1)"
+  },
+  "1edf705781e8fea4530e9f97c15fe066d28f6af0e08b2c908f36db5b7eed349f": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Uuid"
+        ]
+      }
+    },
+    "query": "UPDATE users SET username = $1 WHERE id = $2"
+  },
+  "20fca95a0a03b89032cc739ca3b1aa01c4f8b8468d58751c38541a4960cdfa94": {
+    "describe": {
+      "columns": [
+        {
+          "name": "email",
+          "ordinal": 0,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Uuid"
+        ]
+      }
+    },
+    "query": "SELECT email from email_session WHERE session_id = $1"
+  },
+  "4560c237741ce9d4166aecd669770b3360a3ac71e649b293efb88d92c3254068": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Uuid"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      }
+    },
+    "query": "SELECT id FROM users WHERE email = $1"
+  },
+  "7f9537aa0d527e0831fc6481da3d0293a5fea307bf416614d76fe0fda9f588bc": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Uuid"
+        ]
+      }
+    },
+    "query": "INSERT INTO sessions(id) VALUES($1)"
+  },
+  "88bb066a99e851ba526c5f45e27f1c5b4645c478951a958d926fbb6dde8e7eb7": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Text",
+          "Uuid"
+        ]
+      }
+    },
+    "query": "INSERT INTO email_auth_code(email, code, session_id) VALUES($1, $2, $3)"
+  },
+  "97b9329082cde38c0310775d3d1505e50e4bf6563c0173786b605d05306c25f5": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Uuid"
+        ]
+      }
+    },
+    "query": "DELETE FROM email_auth_code WHERE session_id = $1"
+  },
+  "bb205793fec85bb5edbb43fa62062f3c5a284f6daec293228a5da46f71234595": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Uuid"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      }
+    },
+    "query": "INSERT INTO users(id, username, email) VALUES(gen_random_uuid(), 'unnamed', $1) ON CONFLICT(email) DO NOTHING RETURNING id"
+  },
+  "cf1a149d3682b057bfd33f1c5980bffc42228160b4dece9e0884aa5fa9704609": {
+    "describe": {
+      "columns": [
+        {
+          "name": "email",
+          "ordinal": 0,
+          "type_info": "Text"
+        },
+        {
+          "name": "code",
+          "ordinal": 1,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        false,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Uuid"
+        ]
+      }
+    },
+    "query": "SELECT eac.email, eac.code FROM email_auth_code AS eac LEFT JOIN email_session ON email_session.session_id = $1"
+  },
+  "ddf4c5c4c582f4f73094b48b2945e4b2f6d54d7346585b2dc060b6ac44704b3e": {
+    "describe": {
+      "columns": [
+        {
+          "name": "user_id",
+          "ordinal": 0,
+          "type_info": "Uuid"
+        }
+      ],
+      "nullable": [
+        true
+      ],
+      "parameters": {
+        "Left": [
+          "Uuid"
+        ]
+      }
+    },
+    "query": "SELECT user_id FROM sessions WHERE id = $1"
+  },
+  "de3230de507ca1e11d2ca40bef8a5b8470628ddbaa454af4f49f6fe6953f9014": {
+    "describe": {
+      "columns": [
+        {
+          "name": "username",
+          "ordinal": 0,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        true
+      ],
+      "parameters": {
+        "Left": [
+          "Uuid"
+        ]
+      }
+    },
+    "query": "SELECT username FROM users WHERE id = $1"
+  },
+  "f2007f855290903d5dd6b22e9a9c79d51e98397415adf2cd1b80debd62ebc643": {
+    "describe": {
+      "columns": [
+        {
+          "name": "v",
+          "ordinal": 0,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      }
+    },
+    "query": "SELECT v FROM settings WHERE k = $1"
+  }
+}
